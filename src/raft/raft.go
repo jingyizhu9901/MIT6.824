@@ -309,11 +309,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.changeState(FOLLOWER)
 	}
 
+	// reset timer
+	rf.lastHeardFromLeader = time.Now()
+	rf.electionTimeout = 0
+
 	// LOG CONSISTENCY CHECK
 	// reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
 	lastLogIndex := len(rf.log)
 	prevLogTerm := -1
-	if len(rf.log) > 0 && args.PrevLogIndex-1 >= 0 {
+	if len(rf.log) > 0 && args.PrevLogIndex-1 >= 0 && args.PrevLogIndex-1 < len(rf.log) {
 		prevLogTerm = rf.log[args.PrevLogIndex-1].Term
 	}
 	if lastLogIndex < args.PrevLogIndex || prevLogTerm != args.PrevLogTerm { // my log is shorter than i should || my log is inconsistent
@@ -322,18 +326,28 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	if len(args.Entries) > 0 {
-		rf.log = append(rf.log, args.Entries[0]) // FIXME
+	// find unmatched index
+	unmatchedIdx := -1
+	for idx := range args.Entries {
+		if len(rf.log)-1 < (args.PrevLogIndex+idx) || // rf.log does not contain entries[idx]
+			rf.log[args.PrevLogIndex+idx].Term != args.Entries[idx].Term { // term is different
+			unmatchedIdx = idx
+			break
+		}
 	}
-	fmt.Printf("Raft %v log is length %v\n", rf.me, len(rf.log))
+
+	if unmatchedIdx != -1 {
+		// delete conflicting entries
+		rf.log = rf.log[:(args.PrevLogIndex + unmatchedIdx)]
+		// append leader's log
+		rf.log = append(rf.log, args.Entries[unmatchedIdx:]...)
+	}
+
+	// fmt.Printf("Raft %v log is length %v\n", rf.me, len(rf.log))
 
 	if args.LeaderCommit > rf.commitIndex {
 		rf.commit(args.LeaderCommit)
 	}
-
-	// reset timer
-	rf.lastHeardFromLeader = time.Now()
-	rf.electionTimeout = 0
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -564,11 +578,8 @@ func (rf *Raft) heartbeats() {
 }
 
 func (rf *Raft) heartbeat(peer int) {
-	fmt.Printf("Raft %v sending AppendEntries RPC to peer %v\n", rf.me, peer)
-
 	// construct args
 	rf.mu.Lock()
-	fmt.Println(rf.nextIndex)
 	prevLogIndex := rf.nextIndex[peer] - 1
 	prevLogTerm := -1
 	if len(rf.log) > 0 && prevLogIndex >= 1 {
@@ -579,7 +590,7 @@ func (rf *Raft) heartbeat(peer int) {
 		entries = make([]logEntry, len(rf.log[prevLogIndex:]))
 		copy(entries, rf.log[prevLogIndex:]) // send log entries starting at nextIndex
 	}
-	fmt.Printf("== 2B: prevLogIndex is %v, rf.log has length %v, Entry has length %v\n", prevLogIndex, len(rf.log), len(entries))
+	fmt.Printf("== 2B: Raft %v sending AppendEntries RPC to peer %v. prevLogIndex is %v, rf.log has length %v, Entry has length %v\n", rf.me, peer, prevLogIndex, len(rf.log), len(entries))
 
 	args := AppendEntriesArgs{
 		Term:         rf.currentTerm,
@@ -601,7 +612,6 @@ func (rf *Raft) commit(commitIdx int) {
 	if rf.commitIndex > rf.lastApplied {
 		fmt.Printf("== COMMIT: Server %v Commit Log index %v\n", rf.me, commitIdx)
 		entriesToApply := append([]logEntry{}, rf.log[(rf.lastApplied):(rf.commitIndex)]...)
-		fmt.Printf("entriesToApply has length %v\n", len(entriesToApply))
 		go func(startIdx int, entires []logEntry) {
 			for idx, entry := range entires {
 				msg := ApplyMsg{
@@ -641,6 +651,7 @@ func (rf *Raft) changeState(state string) {
 			rf.nextIndex[peerIdx] = len(rf.log) + 1 // init to leader's last log index + 1, log index starts from 1
 			rf.matchIndex[peerIdx] = 0              // init to 0
 		}
+		rf.heartbeats()
 		fmt.Printf("Raft %v change to Leader in Term %v\n", rf.me, rf.currentTerm)
 	}
 }

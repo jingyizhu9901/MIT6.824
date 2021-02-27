@@ -168,6 +168,7 @@ func TestFailAgree2B(t *testing.T) {
 
 	// disconnect one follower from the network.
 	leader := cfg.checkOneLeader()
+	fmt.Println("** Check One Leader, then Disconnect one follower **")
 	cfg.disconnect((leader + 1) % servers)
 
 	// the leader and remaining follower should be
@@ -180,6 +181,7 @@ func TestFailAgree2B(t *testing.T) {
 
 	// re-connect
 	cfg.connect((leader + 1) % servers)
+	fmt.Println("** Reconnect one follower **")
 
 	// the full set of servers should preserve
 	// previous agreements, and be able to agree
@@ -395,6 +397,7 @@ func TestBackup2B(t *testing.T) {
 	cfg.disconnect((leader1 + 2) % servers)
 	cfg.disconnect((leader1 + 3) % servers)
 	cfg.disconnect((leader1 + 4) % servers)
+	fmt.Printf("** Leader now is %v, then Disconnect 3 followers **\n", leader1)
 
 	// submit lots of commands that won't commit
 	for i := 0; i < 50; i++ {
@@ -403,13 +406,15 @@ func TestBackup2B(t *testing.T) {
 
 	time.Sleep(RaftElectionTimeout / 2)
 
-	cfg.disconnect((leader1 + 0) % servers)
-	cfg.disconnect((leader1 + 1) % servers)
+	cfg.disconnect((leader1 + 0) % servers) //2
+	cfg.disconnect((leader1 + 1) % servers) //3
+	fmt.Println("** Disconnect 2 servers **")
 
 	// allow other partition to recover
 	cfg.connect((leader1 + 2) % servers)
 	cfg.connect((leader1 + 3) % servers)
 	cfg.connect((leader1 + 4) % servers)
+	fmt.Println("** Connect 2 servers **")
 
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
@@ -423,6 +428,7 @@ func TestBackup2B(t *testing.T) {
 		other = (leader2 + 1) % servers
 	}
 	cfg.disconnect(other)
+	fmt.Printf("** Disconnect 1 servers. Leader now is %v, it has one follower **\n", leader2)
 
 	// lots more commands that won't commit
 	for i := 0; i < 50; i++ {
@@ -438,6 +444,7 @@ func TestBackup2B(t *testing.T) {
 	cfg.connect((leader1 + 0) % servers)
 	cfg.connect((leader1 + 1) % servers)
 	cfg.connect(other)
+	fmt.Printf("** Connect original leader %v and two followers **\n", leader1)
 
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
@@ -448,6 +455,8 @@ func TestBackup2B(t *testing.T) {
 	for i := 0; i < servers; i++ {
 		cfg.connect(i)
 	}
+	fmt.Printf("** Connect everyone **\n")
+
 	cfg.one(rand.Int(), servers, true)
 
 	cfg.end()
