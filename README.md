@@ -7,3 +7,4 @@ Below is my implementation:
 - [ ] Lab 1 - MapReduce
 - [ ] Lab 2 - Raft
   - [x] Part 2A - Implement Raft leader election and heartbeats
+  - [x] Part 2B - Implement the leader and follower code to append new log entries
