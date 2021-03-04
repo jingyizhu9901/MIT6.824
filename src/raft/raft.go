@@ -18,7 +18,6 @@ package raft
 //
 
 import (
-	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -181,7 +180,7 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	//fmt.Printf("Raft %v receives request vote from raft %v\n", rf.me, args.CandidateID)
+	//DPrintf("Raft %v receives request vote from raft %v\n", rf.me, args.CandidateID)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -215,7 +214,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateID {
 		rf.votedFor = args.CandidateID
 		reply.VoteGranted = true
-		fmt.Printf("Raft %v vote for raft %v\n", rf.me, args.CandidateID)
+		DPrintf("Raft %v vote for raft %v\n", rf.me, args.CandidateID)
 	}
 }
 
@@ -321,7 +320,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		prevLogTerm = rf.log[args.PrevLogIndex-1].Term
 	}
 	if lastLogIndex < args.PrevLogIndex || prevLogTerm != args.PrevLogTerm { // my log is shorter than i should || my log is inconsistent
-		fmt.Printf("Raft %v log is inconsistent with leader %v\n", rf.me, args.LeaderID)
+		DPrintf("Raft %v log is inconsistent with leader %v\n", rf.me, args.LeaderID)
 		reply.Success = false
 		return
 	}
@@ -343,7 +342,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.log = append(rf.log, args.Entries[unmatchedIdx:]...)
 	}
 
-	// fmt.Printf("Raft %v log is length %v\n", rf.me, len(rf.log))
+	// DPrintf("Raft %v log is length %v\n", rf.me, len(rf.log))
 
 	if args.LeaderCommit > rf.commitIndex {
 		rf.commit(args.LeaderCommit)
@@ -359,11 +358,11 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 	rf.mu.Lock()
 	if reply.Success { // success
-		fmt.Printf("Raft %v replies success AppendEntries RPC\n", server)
+		DPrintf("Raft %v replies success AppendEntries RPC\n", server)
 		rf.matchIndex[server] = args.PrevLogIndex + len(args.Entries)
 		rf.nextIndex[server] = rf.matchIndex[server] + 1
-		fmt.Println(rf.matchIndex)
-		fmt.Println(rf.nextIndex)
+		DPrintf("matchIndex is %v\n", rf.matchIndex)
+		DPrintf("nextIndex is %v\n", rf.nextIndex)
 		for N := len(rf.log); N > rf.commitIndex; N-- {
 			peerCount := 0
 			for _, idx := range rf.matchIndex {
@@ -373,7 +372,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 			}
 
 			if peerCount > len(rf.peers)/2 {
-				fmt.Printf("Master %v has log %v replicated on majority\n", rf.me, N)
+				DPrintf("Master %v has log %v replicated on majority\n", rf.me, N)
 				rf.commit(N)
 				break
 			}
@@ -432,7 +431,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.matchIndex[rf.me] = index
 	rf.nextIndex[rf.me] = index + 1
 	term = rf.currentTerm
-	fmt.Printf("=== 2B: Master %v received Log, rf.log has length %v\n", rf.me, len(rf.log))
+	DPrintf("=== 2B: Master %v received Log, rf.log has length %v\n", rf.me, len(rf.log))
 	return index, term, isLeader
 }
 
@@ -476,7 +475,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
-	fmt.Printf("Making raft%v...\n", rf.me)
+	DPrintf("Making raft%v...\n", rf.me)
 	rf.currentTerm = 0
 	rf.votedFor = -1
 	rf.log = make([]logEntry, 0)
@@ -504,7 +503,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 // while
 
 func (rf *Raft) kickOffElection() {
-	/// fmt.Printf("raft %v kicks Off Election\n", rf.me)
+	/// DPrintf("raft %v kicks Off Election\n", rf.me)
 	for {
 		time.Sleep(20 * time.Millisecond)
 
@@ -517,7 +516,7 @@ func (rf *Raft) kickOffElection() {
 		timePassed := time.Since(rf.lastHeardFromLeader).Seconds() * 1000
 		timeout := float64(rf.electionTimeout) < timePassed
 		// if timeout {
-		// 	fmt.Printf("Raft %v timeout true at term %v\n", rf.me, rf.currentTerm)
+		// 	DPrintf("Raft %v timeout true at term %v\n", rf.me, rf.currentTerm)
 		// }
 
 		switch state {
@@ -541,7 +540,7 @@ func (rf *Raft) kickOffElection() {
 }
 
 func (rf *Raft) startElection() {
-	fmt.Printf("raft %v of state %s startsElection at term %v\n", rf.me, rf.state, rf.currentTerm+1)
+	DPrintf("raft %v of state %s startsElection at term %v\n", rf.me, rf.state, rf.currentTerm+1)
 	rf.mu.Lock()
 	rf.currentTerm++
 	rf.votedFor = rf.me
@@ -590,7 +589,7 @@ func (rf *Raft) heartbeat(peer int) {
 		entries = make([]logEntry, len(rf.log[prevLogIndex:]))
 		copy(entries, rf.log[prevLogIndex:]) // send log entries starting at nextIndex
 	}
-	fmt.Printf("== 2B: Raft %v sending AppendEntries RPC to peer %v. prevLogIndex is %v, rf.log has length %v, Entry has length %v\n", rf.me, peer, prevLogIndex, len(rf.log), len(entries))
+	DPrintf("== 2B: Raft %v sending AppendEntries RPC to peer %v. prevLogIndex is %v, rf.log has length %v, Entry has length %v\n", rf.me, peer, prevLogIndex, len(rf.log), len(entries))
 
 	args := AppendEntriesArgs{
 		Term:         rf.currentTerm,
@@ -610,7 +609,7 @@ func (rf *Raft) heartbeat(peer int) {
 func (rf *Raft) commit(commitIdx int) {
 	rf.commitIndex = commitIdx
 	if rf.commitIndex > rf.lastApplied {
-		fmt.Printf("== COMMIT: Server %v Commit Log index %v\n", rf.me, commitIdx)
+		DPrintf("== COMMIT: Server %v Commit Log index %v\n", rf.me, commitIdx)
 		entriesToApply := append([]logEntry{}, rf.log[(rf.lastApplied):(rf.commitIndex)]...)
 		go func(startIdx int, entires []logEntry) {
 			for idx, entry := range entires {
@@ -638,12 +637,12 @@ func (rf *Raft) changeState(state string) {
 
 	if state == FOLLOWER {
 		rf.state = FOLLOWER
-		fmt.Printf("Raft %v change to Follower in Term %v\n", rf.me, rf.currentTerm)
+		DPrintf("Raft %v change to Follower in Term %v\n", rf.me, rf.currentTerm)
 		rf.votedFor = -1
 	}
 	if state == CANDIDATE {
 		rf.state = CANDIDATE
-		fmt.Printf("Raft %v change to Candidate in Term %v\n", rf.me, rf.currentTerm)
+		DPrintf("Raft %v change to Candidate in Term %v\n", rf.me, rf.currentTerm)
 	}
 	if state == LEADER {
 		rf.state = LEADER
@@ -652,7 +651,7 @@ func (rf *Raft) changeState(state string) {
 			rf.matchIndex[peerIdx] = 0              // init to 0
 		}
 		rf.heartbeats()
-		fmt.Printf("Raft %v change to Leader in Term %v\n", rf.me, rf.currentTerm)
+		DPrintf("Raft %v change to Leader in Term %v\n", rf.me, rf.currentTerm)
 	}
 }
 
