@@ -626,14 +626,17 @@ func TestPersist22C(t *testing.T) {
 	cfg.begin("Test (2C): more persistence")
 
 	index := 1
-	for iters := 0; iters < 5; iters++ {
+	for iters := 0; iters < 2; iters++ {
+		DPrintf("** Iteration: %v ** \n", iters)
 		cfg.one(10+index, servers, true)
 		index++
 
 		leader1 := cfg.checkOneLeader()
+		DPrintf("** Leader is %v\n", leader1)
 
 		cfg.disconnect((leader1 + 1) % servers)
 		cfg.disconnect((leader1 + 2) % servers)
+		DPrintf("** Disconnect 2 servers ** \n")
 
 		cfg.one(10+index, servers-2, true)
 		index++
@@ -641,22 +644,26 @@ func TestPersist22C(t *testing.T) {
 		cfg.disconnect((leader1 + 0) % servers)
 		cfg.disconnect((leader1 + 3) % servers)
 		cfg.disconnect((leader1 + 4) % servers)
+		DPrintf("** Disconnect all servers ** \n")
 
 		cfg.start1((leader1 + 1) % servers)
 		cfg.start1((leader1 + 2) % servers)
 		cfg.connect((leader1 + 1) % servers)
 		cfg.connect((leader1 + 2) % servers)
+		DPrintf("** Restart and reconnect 2 servers ** \n")
 
 		time.Sleep(RaftElectionTimeout)
 
 		cfg.start1((leader1 + 3) % servers)
 		cfg.connect((leader1 + 3) % servers)
+		DPrintf("** Restart and reconnect 1 server ** \n")
 
 		cfg.one(10+index, servers-2, true)
 		index++
 
 		cfg.connect((leader1 + 4) % servers)
 		cfg.connect((leader1 + 0) % servers)
+		DPrintf("** Reconnect 2 servers (including leader) ** \n")
 	}
 
 	cfg.one(1000, servers, true)

@@ -18,16 +18,16 @@ package raft
 //
 
 import (
+	"bytes"
+	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"../labgob"
 	"../labrpc"
 )
-
-// import "bytes"
-// import "../labgob"
 
 const (
 	FOLLOWER  = "Follower"
@@ -123,34 +123,41 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.log)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	data := w.Bytes()
+	DPrintf("** 2C: Persist() -> len(log) = %v; currentTerm = %v; votedFor = %v\n", len(rf.log), rf.currentTerm, rf.votedFor)
+	rf.persister.SaveRaftState(data)
 }
 
 //
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
+	DPrintf("** 2C: readPersist() \n")
 	if data == nil || len(data) < 1 { // bootstrap without any state?
+		DPrintf("** 2C: readPersist() no data to read \n")
 		return
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var log []logEntry
+	var currentTerm int
+	var votedFor int
+	if d.Decode(&log) != nil || d.Decode(&currentTerm) != nil || d.Decode(&votedFor) != nil {
+		//error...
+		DPrintf("Error when reading persist\n")
+	} else {
+		rf.log = log
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		DPrintf("** 2C: ReadPersist() got data -> len(log) = %v; currentTerm = %v; votedFor = %v\n", len(rf.log), rf.currentTerm, rf.votedFor)
+	}
 }
 
 //
@@ -183,9 +190,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	//DPrintf("Raft %v receives request vote from raft %v\n", rf.me, args.CandidateID)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	// candidate's term is smaller than my term
-	if args.Term < rf.currentTerm {
+	if args.Term < rf.currentTerm || (args.Term == rf.currentTerm && rf.votedFor != -1 && rf.votedFor != args.CandidateID) {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
 		return
@@ -262,6 +270,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	if reply.Term > rf.currentTerm {
 		rf.currentTerm = reply.Term
 		rf.changeState(FOLLOWER)
+		rf.persist()
 		return ok
 	}
 	if reply.VoteGranted {
@@ -287,13 +296,21 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int  // currTerm, for leader to update itself
 	Success bool // true if follower contained entry matching prevLogIndex and prevLogTerm
+	// faster roll-back
+	XTerm  int
+	Xindex int
+	XLen   int
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	reply.Success = true
+	reply.XTerm = -1
+	reply.Xindex = -1
+	reply.XLen = len(rf.log)
 
 	// reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
@@ -322,6 +339,19 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if lastLogIndex < args.PrevLogIndex || prevLogTerm != args.PrevLogTerm { // my log is shorter than i should || my log is inconsistent
 		DPrintf("Raft %v log is inconsistent with leader %v\n", rf.me, args.LeaderID)
 		reply.Success = false
+		if prevLogTerm != -1 {
+			reply.XTerm = prevLogTerm
+			reply.Xindex = args.PrevLogIndex - 1
+			// find the index of the first entry with XTerm
+			for reply.Xindex >= 0 && rf.log[reply.Xindex].Term >= reply.XTerm {
+				reply.Xindex--
+			}
+			reply.Xindex++
+			if rf.log[reply.Xindex].Term != reply.XTerm {
+				fmt.Println("Error: cannot find Xindex")
+				reply.Xindex = -1
+			}
+		}
 		return
 	}
 
@@ -380,9 +410,21 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	} else {
 		if reply.Term > rf.currentTerm {
 			rf.currentTerm = reply.Term
+			rf.persist()
 			rf.changeState(FOLLOWER)
 		} else { // fails because of log inconsistency
-			rf.nextIndex[server]--
+			rf.nextIndex[server] = reply.XLen + 1
+			if reply.XTerm != -1 {
+				rf.nextIndex[server] = reply.Xindex
+			}
+			if reply.Xindex != -1 {
+				for i := args.PrevLogIndex; i >= 1; i-- {
+					if rf.log[i-1].Term == reply.XTerm {
+						rf.nextIndex[server] = i
+						break
+					}
+				}
+			}
 		}
 	}
 	rf.mu.Unlock()
@@ -426,6 +468,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// is leader, start agreement
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 	rf.log = append(rf.log, logEntry{command, rf.currentTerm})
 	index = len(rf.log)
 	rf.matchIndex[rf.me] = index
@@ -490,10 +533,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 
-	go rf.kickOffElection()
-
 	// initialize from state persisted before a crash
+	rf.mu.Lock()
 	rf.readPersist(persister.ReadRaftState())
+	rf.mu.Unlock()
+
+	go rf.kickOffElection()
 
 	return rf
 }
@@ -544,6 +589,7 @@ func (rf *Raft) startElection() {
 	rf.mu.Lock()
 	rf.currentTerm++
 	rf.votedFor = rf.me
+	rf.persist()
 	rf.voteCount = 1
 	rf.lastHeardFromLeader = time.Now()
 
