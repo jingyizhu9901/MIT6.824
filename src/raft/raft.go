@@ -53,6 +53,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	CommandTerm  int
 }
 
 // log entry
@@ -663,6 +664,7 @@ func (rf *Raft) commit(commitIdx int) {
 					Command:      entry.Command,
 					CommandIndex: startIdx + idx + 1,
 					CommandValid: true,
+					CommandTerm: entry.Term,
 				}
 				rf.applyCh <- msg
 				rf.mu.Lock()

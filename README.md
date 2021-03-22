@@ -6,7 +6,7 @@ This repo is my self-learning journey of MIT6.824 2021 Spring version. Below is
 my implementation:
 
 - [ ] Lab 1 - MapReduce
-- [ ] Lab 2 - Raft
+- [x] Lab 2 - Raft
   - [x] Part 2A - Implement Raft leader election and heartbeats
   - [x] Part 2B - Implement the leader and follower code to append new log
         entries
