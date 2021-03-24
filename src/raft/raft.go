@@ -558,9 +558,9 @@ func (rf *Raft) kickOffElection() {
 		if rf.electionTimeout == 0 {
 			rf.electionTimeout = rand.Intn(HEARTBEAT_TIMEOUT) + HEARTBEAT_TIMEOUT*3
 		}
-		rf.mu.Unlock()
 		timePassed := time.Since(rf.lastHeardFromLeader).Seconds() * 1000
 		timeout := float64(rf.electionTimeout) < timePassed
+		rf.mu.Unlock()
 		// if timeout {
 		// 	DPrintf("Raft %v timeout true at term %v\n", rf.me, rf.currentTerm)
 		// }
@@ -608,8 +608,12 @@ func (rf *Raft) startElection() {
 	rf.mu.Unlock()
 
 	for peer := range rf.peers {
+		rf.mu.Lock()
 		if peer != rf.me && rf.state == CANDIDATE {
+			rf.mu.Unlock()
 			go rf.sendRequestVote(peer, &args, &RequestVoteReply{})
+		} else {
+			rf.mu.Unlock()
 		}
 	}
 }
@@ -658,13 +662,17 @@ func (rf *Raft) commit(commitIdx int) {
 	if rf.commitIndex > rf.lastApplied {
 		DPrintf("== COMMIT: Server %v Commit Log index %v\n", rf.me, commitIdx)
 		entriesToApply := append([]logEntry{}, rf.log[(rf.lastApplied):(rf.commitIndex)]...)
-		go func(startIdx int, entires []logEntry) {
-			for idx, entry := range entires {
+		go func(startIdx int, entries []logEntry) {
+			for idx, entry := range entries {
 				msg := ApplyMsg{
 					Command:      entry.Command,
 					CommandIndex: startIdx + idx + 1,
 					CommandValid: true,
 					CommandTerm: entry.Term,
+				}
+				if cmd, ok := entry.Command.(string); ok && cmd == "" {
+					msg.CommandValid = false
+					DPrintf("Empty Command found")
 				}
 				rf.applyCh <- msg
 				rf.mu.Lock()

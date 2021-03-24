@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 )
 
-const Debug = 1
+const Debug = 0
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -21,9 +21,10 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 
 type Op struct {
 	RequestId	int64
+	PreviousId  int64
 	Key			string
-	Value string
-	Op	string // "Get", "Put", "Append"
+	Value 		string
+	Op			string // "Get", "Put", "Append"
 }
 
 type KVServer struct {
@@ -38,6 +39,7 @@ type KVServer struct {
 	// Your definitions here.
 	data		  map[string]string	// key-value pair
 	notifyChanMap map[int]chan notifyArgs // index returned from raft - chan to notify RPC handlers
+	executedRequest map[int64]bool // a set stores requests that has been executed. It is used to prevent duplication
 }
 
 // used to notify RPC handlers
@@ -56,7 +58,7 @@ func (kv *KVServer) notifyIfPresent(index int, reply notifyArgs) {
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
-	op := Op{RequestId: args.RequestId, Key: args.Key, Value: "", Op: "Get"}
+	op := Op{RequestId: args.RequestId, PreviousId: args.PreviousId, Key: args.Key, Value: "", Op: "Get"}
 	index, term, ok := kv.rf.Start(op)
 	if !ok {
 		kv.mu.Unlock()
@@ -77,11 +79,18 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
-	op := Op{RequestId: args.RequestId, Key: args.Key, Value: args.Value, Op: args.Op}
+
+	// this request is duplicated
+	if exist := kv.executedRequest[args.RequestId]; exist{
+		reply.Err = OK
+		kv.mu.Unlock()
+		return
+	}
+	op := Op{RequestId: args.RequestId, PreviousId: args.PreviousId, Key: args.Key, Value: args.Value, Op: args.Op}
 	index, term, ok := kv.rf.Start(op)
 	if !ok {
-		kv.mu.Unlock()
 		reply.Err = ErrWrongLeader
+		kv.mu.Unlock()
 		return
 	}
 	notifyCh := make(chan notifyArgs)
@@ -118,6 +127,7 @@ func (kv *KVServer) killed() bool {
 
 func (kv *KVServer) handleValidCommand(msg raft.ApplyMsg) {
 	cmd := msg.Command.(Op)
+	delete(kv.executedRequest, cmd.PreviousId) // free server memory quickly
 	result := notifyArgs{Term: msg.CommandTerm, Value: "", Err: OK}
 	if cmd.Op == "Get" {
 		if v, ok := kv.data[cmd.Key]; ok {
@@ -127,19 +137,23 @@ func (kv *KVServer) handleValidCommand(msg raft.ApplyMsg) {
 			result.Err = ErrNoKey
 		}
 	} else {
-		if cmd.Op == "Put" {
-			kv.data[cmd.Key] = cmd.Value
-		} else {
-			if v, ok := kv.data[cmd.Key]; ok {
-				kv.data[cmd.Key] = v + cmd.Value
-			} else {
+		if exists := kv.executedRequest[cmd.RequestId]; !exists { // execute the same RequestId only once
+			if cmd.Op == "Put" {
 				kv.data[cmd.Key] = cmd.Value
+			} else {
+				if v, ok := kv.data[cmd.Key]; ok {
+					kv.data[cmd.Key] = v + cmd.Value
+				} else {
+					kv.data[cmd.Key] = cmd.Value
+				}
 			}
+			kv.executedRequest[cmd.RequestId] = true
 		}
 	}
 	kv.notifyIfPresent(msg.CommandIndex, result)
 }
 
+// keep reading applyCh
 func (kv *KVServer) run() {
 	for {
 		select {
@@ -148,7 +162,7 @@ func (kv *KVServer) run() {
 			if msg.CommandValid {
 				kv.handleValidCommand(msg)
 			} else { // command not valid
-				if cmd, ok := msg.Command.(string); ok && (cmd == "" || cmd == "LogTruncation") {
+				if cmd, ok := msg.Command.(string); ok && cmd == "" {
 					reply := notifyArgs{Term: msg.CommandTerm, Value: "", Err: ErrWrongLeader}
 					kv.notifyIfPresent(msg.CommandIndex, reply)
 				}
@@ -190,6 +204,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.data = make(map[string]string)
 	kv.notifyChanMap = make(map[int]chan notifyArgs)
+	kv.executedRequest = make(map[int64]bool)
 
 	go kv.run()
 
