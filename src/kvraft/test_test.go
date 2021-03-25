@@ -199,6 +199,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		go spawn_clients_and_wait(t, cfg, nclients, func(cli int, myck *Clerk, t *testing.T) {
 			j := 0
 			defer func() {
+				DPrintf("!!!!!!!!!!!!!!!!!!!!!!!!!DEFER FUNCTION DONE")
 				clnts[cli] <- j
 			}()
 			last := ""
@@ -582,10 +583,10 @@ func TestOnePartition3A(t *testing.T) {
 	cfg.end()
 }
 
-// func TestManyPartitionsOneClient3A(t *testing.T) {
-// 	// Test: partitions, one client (3A) ...
-// 	GenericTest(t, "3A", 1, false, false, true, -1)
-// }
+func TestManyPartitionsOneClient3A(t *testing.T) {
+	// Test: partitions, one client (3A) ...
+	GenericTest(t, "3A", 1, false, false, true, -1)
+}
 
 func TestManyPartitionsManyClients3A(t *testing.T) {
 	// Test: partitions, many clients (3A) ...

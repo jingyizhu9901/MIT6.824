@@ -52,6 +52,7 @@ type notifyArgs struct {
 func (kv *KVServer) notifyIfPresent(index int, reply notifyArgs) {
 	if ch, ok := kv.notifyChanMap[index]; ok {
 		ch <- reply
+		DPrintf("!!! PRESENT and NOTIFY")
 		delete(kv.notifyChanMap, index)
 	}
 }
@@ -162,7 +163,8 @@ func (kv *KVServer) run() {
 			if msg.CommandValid {
 				kv.handleValidCommand(msg)
 			} else { // command not valid
-				if cmd, ok := msg.Command.(string); ok && cmd == "" {
+				DPrintf("!!! Received invalid Command")
+				if _, ok := msg.Command.(string); ok {
 					reply := notifyArgs{Term: msg.CommandTerm, Value: "", Err: ErrWrongLeader}
 					kv.notifyIfPresent(msg.CommandIndex, reply)
 				}

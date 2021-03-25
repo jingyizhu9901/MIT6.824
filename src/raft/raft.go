@@ -325,6 +325,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.currentTerm = args.Term
 		rf.changeState(FOLLOWER)
 	}
+	rf.state = FOLLOWER
 
 	// reset timer
 	rf.lastHeardFromLeader = time.Now()
@@ -388,6 +389,12 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	}
 
 	rf.mu.Lock()
+
+	if rf.state != LEADER {
+		rf.mu.Unlock()
+		return false
+	}
+
 	if reply.Success { // success
 		DPrintf("Raft %v replies success AppendEntries RPC\n", server)
 		rf.matchIndex[server] = args.PrevLogIndex + len(args.Entries)
@@ -412,6 +419,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		if reply.Term > rf.currentTerm {
 			rf.currentTerm = reply.Term
 			rf.persist()
+			rf.notifyWrongLeader()
 			rf.changeState(FOLLOWER)
 		} else { // fails because of log inconsistency
 			rf.nextIndex[server] = reply.XLen + 1
@@ -706,9 +714,15 @@ func (rf *Raft) changeState(state string) {
 			rf.nextIndex[peerIdx] = len(rf.log) + 1 // init to leader's last log index + 1, log index starts from 1
 			rf.matchIndex[peerIdx] = 0              // init to 0
 		}
+		rf.matchIndex[rf.me] = len(rf.log)
 		rf.heartbeats()
 		DPrintf("Raft %v change to Leader in Term %v\n", rf.me, rf.currentTerm)
 	}
+}
+
+func (rf *Raft) notifyWrongLeader() {
+	DPrintf("!!! Raft %v is no longer the leader, send notify to applyCh", rf.me)
+	rf.applyCh <- ApplyMsg{CommandValid: false, CommandIndex: len(rf.log), CommandTerm: -1, Command: "ErrWrongLeader"}
 }
 
 func min(a, b int) int {

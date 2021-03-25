@@ -12,3 +12,6 @@ my implementation:
         entries
   - [x] Part 2C - Complete the functions persist() and readPersist() in raft.go,
         and realized faster roll-back
+- [x] Lab 3 - Fault-tolerant Key/Value Service
+  - [x] Part 3A - Key/value service without log compaction
+  - [ ] Part 3B - Key/value service with log compaction

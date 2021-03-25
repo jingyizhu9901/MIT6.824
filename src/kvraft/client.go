@@ -51,28 +51,14 @@ func (ck *Clerk) Get(key string) string {
 	DPrintf("Clert GET %s", key)
 	args := GetArgs{RequestId: ck.genMsgId(), PreviousId: ck.previousId, Key: key, }
 	ck.previousId = args.RequestId
-	leaderId := ck.leaderId
-	for {
+
+	for ; ; ck.leaderId = (ck.leaderId + 1) % len(ck.servers) {
+		server := ck.servers[ck.leaderId]
 		reply := GetReply{}
-		if ck.servers[leaderId].Call("KVServer.Get", &args, &reply) {
-			switch reply.Err {
-			case OK:
-				DPrintf("GET key = %s, value = %s", key, reply.Value)
-				ck.leaderId = leaderId
-				return reply.Value
-			case ErrNoKey:
-				DPrintf("GET err no key, ket = %s", key)
-				ck.leaderId = leaderId
-				return ""
-			case ErrWrongLeader:
-				time.Sleep(ChangeLeaderInterval)
-				leaderId = (leaderId + 1) % len(ck.servers)
-				continue
-			}
-		} else {
-			time.Sleep(ChangeLeaderInterval)
-			leaderId = (leaderId + 1) % len(ck.servers)
-			continue
+		ok := server.Call("KVServer.Get", &args, &reply)
+		if ok && (reply.Err == OK || reply.Err == ErrNoKey ){
+			DPrintf("!!! Clert GET %s, value is %s", key, reply.Value)
+			return reply.Value
 		}
 	}
 }
@@ -91,27 +77,14 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	DPrintf("Clert PutAppend %s, %v", key, value)
 	args := PutAppendArgs{RequestId: ck.genMsgId(), PreviousId: ck.previousId, Key: key, Value: value, Op: op}
 	ck.previousId = args.RequestId
-	leaderId := ck.leaderId
-	for {
+
+	for ; ; ck.leaderId = (ck.leaderId + 1) % len(ck.servers) {
+		server := ck.servers[ck.leaderId]
 		reply := GetReply{}
-		if ck.servers[leaderId].Call("KVServer.PutAppend", &args, &reply) {
-			switch reply.Err {
-			case OK:
-				DPrintf("PUT key = %v, value = %v ", key, value)
-				ck.leaderId = leaderId
-				return
-			case ErrNoKey:
-				DPrintf("PUT err no key, key = %s", key)
-				ck.leaderId = leaderId
-			case ErrWrongLeader:
-				time.Sleep(ChangeLeaderInterval)
-				leaderId = (leaderId + 1) % len(ck.servers)
-				continue
-			}
-		} else {
-			time.Sleep(ChangeLeaderInterval)
-			leaderId = (leaderId + 1) % len(ck.servers)
-			continue
+		ok := server.Call("KVServer.PutAppend", &args, &reply)
+		if ok && reply.Err == OK {
+			DPrintf("!!! Clert PutAppend %s, %v DONE", key, value)
+			return
 		}
 	}
 }
