@@ -188,7 +188,7 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	//DPrintf("Raft %v receives request vote from raft %v\n", rf.me, args.CandidateID)
+	DPrintf("Raft %v receives request vote from raft %v\n", rf.me, args.CandidateID)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer rf.persist()
@@ -222,6 +222,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateID {
 		rf.votedFor = args.CandidateID
+		rf.state = FOLLOWER
 		reply.VoteGranted = true
 		DPrintf("Raft %v vote for raft %v\n", rf.me, args.CandidateID)
 	}
@@ -419,7 +420,6 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		if reply.Term > rf.currentTerm {
 			rf.currentTerm = reply.Term
 			rf.persist()
-			rf.notifyWrongLeader()
 			rf.changeState(FOLLOWER)
 		} else { // fails because of log inconsistency
 			rf.nextIndex[server] = reply.XLen + 1
@@ -545,6 +545,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.mu.Lock()
 	rf.readPersist(persister.ReadRaftState())
+	DPrintf("Server %v's log is:", me)
+	for i, log := range(rf.log) {
+		DPrintf("index %v => %v", i,log.Command)
+	}
 	rf.mu.Unlock()
 
 	go rf.kickOffElection()
@@ -562,6 +566,9 @@ func (rf *Raft) kickOffElection() {
 		time.Sleep(20 * time.Millisecond)
 
 		rf.mu.Lock()
+		if rf.killed() {
+			return
+		}
 		state := rf.state
 		if rf.electionTimeout == 0 {
 			rf.electionTimeout = rand.Intn(HEARTBEAT_TIMEOUT) + HEARTBEAT_TIMEOUT*3
@@ -569,9 +576,6 @@ func (rf *Raft) kickOffElection() {
 		timePassed := time.Since(rf.lastHeardFromLeader).Seconds() * 1000
 		timeout := float64(rf.electionTimeout) < timePassed
 		rf.mu.Unlock()
-		// if timeout {
-		// 	DPrintf("Raft %v timeout true at term %v\n", rf.me, rf.currentTerm)
-		// }
 
 		switch state {
 		case FOLLOWER:
@@ -668,8 +672,14 @@ func (rf *Raft) heartbeat(peer int) {
 func (rf *Raft) commit(commitIdx int) {
 	rf.commitIndex = commitIdx
 	if rf.commitIndex > rf.lastApplied {
-		DPrintf("== COMMIT: Server %v Commit Log index %v\n", rf.me, commitIdx)
 		entriesToApply := append([]logEntry{}, rf.log[(rf.lastApplied):(rf.commitIndex)]...)
+		DPrintf("== COMMIT: Server %v Commit Log index %v ~ %v\n", rf.me, rf.lastApplied, commitIdx)
+		if (rf.state == LEADER) {
+			DPrintf("Server %v's log is:", rf.me)
+			for i, log := range(rf.log) {
+				DPrintf("index %v => %v", i,log.Command)
+			}
+		}
 		go func(startIdx int, entries []logEntry) {
 			for idx, entry := range entries {
 				msg := ApplyMsg{
@@ -700,6 +710,9 @@ func (rf *Raft) changeState(state string) {
 	}
 
 	if state == FOLLOWER {
+		if rf.state == LEADER {
+			rf.notifyWrongLeader(rf.commitIndex + 1, len(rf.log))
+		}
 		rf.state = FOLLOWER
 		DPrintf("Raft %v change to Follower in Term %v\n", rf.me, rf.currentTerm)
 		rf.votedFor = -1
@@ -720,9 +733,11 @@ func (rf *Raft) changeState(state string) {
 	}
 }
 
-func (rf *Raft) notifyWrongLeader() {
-	DPrintf("!!! Raft %v is no longer the leader, send notify to applyCh", rf.me)
-	rf.applyCh <- ApplyMsg{CommandValid: false, CommandIndex: len(rf.log), CommandTerm: -1, Command: "ErrWrongLeader"}
+func (rf *Raft) notifyWrongLeader(start, end int) {
+	DPrintf("!!! Raft %v is no longer the leader, send notify to applyCh on CommandIndex %v ~ %v", rf.me, start, end)
+	for i := start; i <= end; i++ {
+		rf.applyCh <- ApplyMsg{CommandValid: false, CommandIndex: i, CommandTerm: -1, Command: "ErrWrongLeader"}
+	}
 }
 
 func min(a, b int) int {

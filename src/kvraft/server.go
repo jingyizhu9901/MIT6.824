@@ -66,6 +66,14 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
+	// detect that it has lost leadership, by noticing that a different request has appeared at the index returned by Start()
+	if ch, ok := kv.notifyChanMap[index]; ok {
+		ch <- notifyArgs{Err: ErrWrongLeader}
+		DPrintf("!!! NOTIFY index %v has switched leader", index)
+		reply.Err = ErrWrongLeader
+		return
+	}
+
 	notifyCh := make(chan notifyArgs)
 	kv.notifyChanMap[index] = notifyCh
 	kv.mu.Unlock()
@@ -94,6 +102,14 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.mu.Unlock()
 		return
 	}
+	// detect that it has lost leadership, by noticing that a different request has appeared at the index returned by Start()
+	if ch, ok := kv.notifyChanMap[index]; ok {
+		ch <- notifyArgs{Err: ErrWrongLeader}
+		DPrintf("!!! NOTIFY index %v has switched leader", index)
+		reply.Err = ErrWrongLeader
+		return
+	}
+
 	notifyCh := make(chan notifyArgs)
 	kv.notifyChanMap[index] = notifyCh
 	kv.mu.Unlock()
@@ -128,7 +144,7 @@ func (kv *KVServer) killed() bool {
 
 func (kv *KVServer) handleValidCommand(msg raft.ApplyMsg) {
 	cmd := msg.Command.(Op)
-	delete(kv.executedRequest, cmd.PreviousId) // free server memory quickly
+	//delete(kv.executedRequest, cmd.PreviousId) // free server memory quickly
 	result := notifyArgs{Term: msg.CommandTerm, Value: "", Err: OK}
 	if cmd.Op == "Get" {
 		if v, ok := kv.data[cmd.Key]; ok {
@@ -141,9 +157,14 @@ func (kv *KVServer) handleValidCommand(msg raft.ApplyMsg) {
 		if exists := kv.executedRequest[cmd.RequestId]; !exists { // execute the same RequestId only once
 			if cmd.Op == "Put" {
 				kv.data[cmd.Key] = cmd.Value
+				DPrintf("PUT*************************")
+				DPrintf("Key:%s => Element:%s", cmd.Key, kv.data[cmd.Key])
 			} else {
 				if v, ok := kv.data[cmd.Key]; ok {
 					kv.data[cmd.Key] = v + cmd.Value
+					DPrintf("APPEND*************************")
+					DPrintf("Key:%s => Element:%s", cmd.Key, kv.data[cmd.Key])
+					// DPrintf("*************************")
 				} else {
 					kv.data[cmd.Key] = cmd.Value
 				}
@@ -151,6 +172,7 @@ func (kv *KVServer) handleValidCommand(msg raft.ApplyMsg) {
 			kv.executedRequest[cmd.RequestId] = true
 		}
 	}
+
 	kv.notifyIfPresent(msg.CommandIndex, result)
 }
 
