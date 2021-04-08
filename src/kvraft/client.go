@@ -50,7 +50,6 @@ func (ck *Clerk) genMsgId() int64 {
 func (ck *Clerk) Get(key string) string {
 	DPrintf("Clert GET %s", key)
 	args := GetArgs{RequestId: ck.genMsgId(), PreviousId: ck.previousId, Key: key, }
-	ck.previousId = args.RequestId
 
 	for ; ; ck.leaderId = (ck.leaderId + 1) % len(ck.servers) {
 		server := ck.servers[ck.leaderId]
@@ -58,6 +57,7 @@ func (ck *Clerk) Get(key string) string {
 		ok := server.Call("KVServer.Get", &args, &reply)
 		if ok && (reply.Err == OK || reply.Err == ErrNoKey ){
 			DPrintf("!!! Clert GET %s, value is %s", key, reply.Value)
+			ck.previousId = args.RequestId
 			return reply.Value
 		}
 	}
@@ -76,7 +76,6 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	DPrintf("Clert PutAppend %s, %v", key, value)
 	args := PutAppendArgs{RequestId: ck.genMsgId(), PreviousId: ck.previousId, Key: key, Value: value, Op: op}
-	ck.previousId = args.RequestId
 
 	for ; ; ck.leaderId = (ck.leaderId + 1) % len(ck.servers) {
 		server := ck.servers[ck.leaderId]
@@ -84,6 +83,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		ok := server.Call("KVServer.PutAppend", &args, &reply)
 		if ok && reply.Err == OK {
 			DPrintf("!!! Clert PutAppend %s, %v DONE", key, value)
+			ck.previousId = args.RequestId
 			return
 		}
 	}

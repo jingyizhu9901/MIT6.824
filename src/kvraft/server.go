@@ -7,6 +7,7 @@ import (
 	"../raft"
 	"sync"
 	"sync/atomic"
+	"bytes"
 )
 
 const Debug = 0
@@ -37,9 +38,11 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	data		  map[string]string	// key-value pair
-	notifyChanMap map[int]chan notifyArgs // index returned from raft - chan to notify RPC handlers
-	executedRequest map[int64]bool // a set stores requests that has been executed. It is used to prevent duplication
+	Data		     map[string]string	// key-value pair
+	notifyChanMap    map[int]chan notifyArgs // index returned from raft - chan to notify RPC handlers
+	ExecutedRequest  map[int64]bool // a set stores requests that has been executed. It is used to prevent duplication
+	LastCommandIndex int // the highest CommandIndex received from Raft, used to delete logs in Raft
+	persister        *raft.Persister
 }
 
 // used to notify RPC handlers
@@ -57,6 +60,41 @@ func (kv *KVServer) notifyIfPresent(index int, reply notifyArgs) {
 	}
 }
 
+func (kv *KVServer) snapshot() {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.LastCommandIndex)
+	e.Encode(kv.ExecutedRequest)
+	e.Encode(kv.Data)
+
+	snapshot := w.Bytes()
+	kv.rf.PersistAndSaveStateAndSnapshot(kv.LastCommandIndex, snapshot)
+}
+
+func (kv *KVServer) readSnapshot() {
+	snapshot := kv.persister.ReadSnapshot()
+	if snapshot == nil || len(snapshot) < 1 {
+		return
+	}
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+
+	lastCommandIndex := 0
+
+	if d.Decode(&lastCommandIndex) != nil ||
+		d.Decode(&kv.ExecutedRequest) != nil ||
+		d.Decode(&kv.Data) != nil {
+		log.Fatal("Error in reading snapshot")
+	}
+	kv.LastCommandIndex = lastCommandIndex
+}
+
+func (kv *KVServer) installSnapshot(index int) {
+	DPrintf("KV server installSnapshot")
+	kv.readSnapshot()
+	kv.LastCommandIndex = index
+}
+
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
 	op := Op{RequestId: args.RequestId, PreviousId: args.PreviousId, Key: args.Key, Value: "", Op: "Get"}
@@ -68,6 +106,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 	// detect that it has lost leadership, by noticing that a different request has appeared at the index returned by Start()
 	if ch, ok := kv.notifyChanMap[index]; ok {
+		kv.mu.Unlock()
 		ch <- notifyArgs{Err: ErrWrongLeader}
 		DPrintf("!!! NOTIFY index %v has switched leader", index)
 		reply.Err = ErrWrongLeader
@@ -90,7 +129,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
 
 	// this request is duplicated
-	if exist := kv.executedRequest[args.RequestId]; exist{
+	if exist := kv.ExecutedRequest[args.RequestId]; exist{
 		reply.Err = OK
 		kv.mu.Unlock()
 		return
@@ -104,6 +143,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 	// detect that it has lost leadership, by noticing that a different request has appeared at the index returned by Start()
 	if ch, ok := kv.notifyChanMap[index]; ok {
+		kv.mu.Unlock()
 		ch <- notifyArgs{Err: ErrWrongLeader}
 		DPrintf("!!! NOTIFY index %v has switched leader", index)
 		reply.Err = ErrWrongLeader
@@ -133,7 +173,10 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 //
 func (kv *KVServer) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
+	kv.mu.Lock()
+	kv.snapshot()
 	kv.rf.Kill()
+	kv.mu.Unlock()
 	// Your code here, if desired.
 }
 
@@ -143,37 +186,47 @@ func (kv *KVServer) killed() bool {
 }
 
 func (kv *KVServer) handleValidCommand(msg raft.ApplyMsg) {
+	DPrintf("command is %v",msg)
 	cmd := msg.Command.(Op)
-	//delete(kv.executedRequest, cmd.PreviousId) // free server memory quickly
+	if kv.LastCommandIndex < msg.CommandIndex {
+		kv.LastCommandIndex = msg.CommandIndex
+	}
+	delete(kv.ExecutedRequest, cmd.PreviousId) // free server memory quickly
 	result := notifyArgs{Term: msg.CommandTerm, Value: "", Err: OK}
 	if cmd.Op == "Get" {
-		if v, ok := kv.data[cmd.Key]; ok {
+		if v, ok := kv.Data[cmd.Key]; ok {
 			result.Value = v
 		} else {
 			result.Value = ""
 			result.Err = ErrNoKey
 		}
 	} else {
-		if exists := kv.executedRequest[cmd.RequestId]; !exists { // execute the same RequestId only once
+		if exists := kv.ExecutedRequest[cmd.RequestId]; !exists { // execute the same RequestId only once
 			if cmd.Op == "Put" {
-				kv.data[cmd.Key] = cmd.Value
+				kv.Data[cmd.Key] = cmd.Value
 				DPrintf("PUT*************************")
-				DPrintf("Key:%s => Element:%s", cmd.Key, kv.data[cmd.Key])
+				DPrintf("Key:%s => Element:%s", cmd.Key, kv.Data[cmd.Key])
 			} else {
-				if v, ok := kv.data[cmd.Key]; ok {
-					kv.data[cmd.Key] = v + cmd.Value
+				if v, ok := kv.Data[cmd.Key]; ok {
+					kv.Data[cmd.Key] = v + cmd.Value
 					DPrintf("APPEND*************************")
-					DPrintf("Key:%s => Element:%s", cmd.Key, kv.data[cmd.Key])
+					DPrintf("Key:%s => Element:%s", cmd.Key, kv.Data[cmd.Key])
 					// DPrintf("*************************")
 				} else {
-					kv.data[cmd.Key] = cmd.Value
+					kv.Data[cmd.Key] = cmd.Value
 				}
 			}
-			kv.executedRequest[cmd.RequestId] = true
+			kv.ExecutedRequest[cmd.RequestId] = true
 		}
 	}
 
 	kv.notifyIfPresent(msg.CommandIndex, result)
+
+	if kv.maxraftstate != -1 && kv.persister.RaftStateSize() >= kv.maxraftstate {
+		DPrintf("Begin Snapshot")
+		kv.snapshot()
+		DPrintf("End Snapshot")
+	}
 }
 
 // keep reading applyCh
@@ -186,7 +239,10 @@ func (kv *KVServer) run() {
 				kv.handleValidCommand(msg)
 			} else { // command not valid
 				DPrintf("!!! Received invalid Command")
-				if _, ok := msg.Command.(string); ok {
+				if cmd, ok := msg.Command.(string); ok {
+					if cmd == "InstallSnapshot" {
+						kv.installSnapshot(msg.CommandIndex)
+					}
 					reply := notifyArgs{Term: msg.CommandTerm, Value: "", Err: ErrWrongLeader}
 					kv.notifyIfPresent(msg.CommandIndex, reply)
 				}
@@ -226,9 +282,15 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 
-	kv.data = make(map[string]string)
+	kv.Data = make(map[string]string)
 	kv.notifyChanMap = make(map[int]chan notifyArgs)
-	kv.executedRequest = make(map[int64]bool)
+	kv.ExecutedRequest = make(map[int64]bool)
+	kv.LastCommandIndex = 0
+	kv.persister = persister
+
+	kv.mu.Lock()
+	kv.readSnapshot()
+	kv.mu.Unlock()
 
 	go kv.run()
 
